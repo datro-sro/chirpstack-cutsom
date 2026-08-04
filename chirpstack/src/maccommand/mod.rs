@@ -31,6 +31,31 @@ pub mod rx_timing_setup;
 pub mod tx_param_setup;
 pub mod update_uplink_list;
 
+pub const MAC_COMMANDS_DISABLED_TAG: &str = "mac_commands_disabled";
+
+pub fn is_disabled(dp: &device_profile::DeviceProfile) -> bool {
+    config::get().network.mac_commands_disabled || is_disabled_by_device_profile_tag(dp)
+}
+
+fn is_disabled_by_device_profile_tag(dp: &device_profile::DeviceProfile) -> bool {
+    dp.tags
+        .get(MAC_COMMANDS_DISABLED_TAG)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or_default()
+}
+
+pub fn clear_if_disabled(
+    dp: &device_profile::DeviceProfile,
+    mac_commands: &mut Vec<lrwn::MACCommandSet>,
+) -> bool {
+    if !is_disabled(dp) {
+        return false;
+    }
+
+    mac_commands.clear();
+    true
+}
+
 // This returns the mac-commands which must be sent back to the device as response and a bool
 // indicating if a downlink must be sent. For some mac-commands, no mac-command answer is required,
 // but the device expects a downlink as confirmation, even if the downlink frame is empty.
@@ -43,8 +68,7 @@ pub async fn handle_uplink(
     dev: &mut device::Device,
     region_conf: Arc<Box<dyn lrwn::region::Region + Send + Sync>>,
 ) -> Result<(Vec<lrwn::MACCommandSet>, bool)> {
-    let conf = config::get();
-    if conf.network.mac_commands_disabled {
+    if is_disabled(dp) {
         return Ok((Vec::new(), false));
     }
 
@@ -204,7 +228,7 @@ pub mod test {
 
         let t: tenant::Tenant = Default::default();
         let app: application::Application = Default::default();
-        let dp: device_profile::DeviceProfile = Default::default();
+        let mut dp: device_profile::DeviceProfile = Default::default();
         let mut dev = device::Device {
             dev_eui: EUI64::from_be_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
             device_session: Some(
@@ -226,8 +250,22 @@ pub mod test {
         assert_eq!(0, resp.len());
         assert!(must_respond);
 
+        // mac-commands disabled by device-profile tag
+        dp.tags
+            .insert(MAC_COMMANDS_DISABLED_TAG.into(), "true".into());
+
+        let (resp, must_respond) =
+            handle_uplink(&upfs, &cmds, &t, &app, &dp, &mut dev, region_conf.clone())
+                .await
+                .unwrap();
+        assert_eq!(0, resp.len());
+        assert!(!must_respond);
+
+        dp.tags.clear();
+
         // mac-commands disabled
         let mut conf = (*config::get()).clone();
+        let original_conf = conf.clone();
         conf.network.mac_commands_disabled = true;
         config::set(conf);
 
@@ -237,5 +275,24 @@ pub mod test {
                 .unwrap();
         assert_eq!(0, resp.len());
         assert!(!must_respond); // must_respond is false as mac-command is ignored
+
+        config::set(original_conf);
+    }
+
+    #[test]
+    fn test_device_profile_tag() {
+        let mut dp: device_profile::DeviceProfile = Default::default();
+        assert!(!is_disabled_by_device_profile_tag(&dp));
+
+        dp.tags
+            .insert(MAC_COMMANDS_DISABLED_TAG.into(), "TRUE".into());
+        assert!(is_disabled_by_device_profile_tag(&dp));
+
+        let mut mac_commands = vec![lrwn::MACCommandSet::new(vec![
+            lrwn::MACCommand::DevStatusReq,
+        ])];
+
+        assert!(clear_if_disabled(&dp, &mut mac_commands));
+        assert!(mac_commands.is_empty());
     }
 }

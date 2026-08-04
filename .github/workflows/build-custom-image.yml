@@ -1,0 +1,67 @@
+name: Build custom ChirpStack image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: registry.digitalocean.com/poseidon-repo/chirpstack:4.17.0-zenner-mac-policy.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install gRPC-Web generator
+        run: |
+          sudo curl --fail --location \
+            --output /usr/local/bin/protoc-gen-grpc-web \
+            https://github.com/grpc/grpc-web/releases/download/2.0.2/protoc-gen-grpc-web-2.0.2-linux-x86_64
+          sudo chmod 0755 /usr/local/bin/protoc-gen-grpc-web
+
+      - name: Generate gRPC-Web API
+        run: |
+          npm --prefix api/grpc-web install --no-package-lock
+          make -C api/grpc-web common gw api integration google-api
+
+      - name: Build UI
+        run: |
+          pnpm --dir ui install --frozen-lockfile
+          pnpm --dir ui build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DigitalOcean Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.digitalocean.com
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.custom
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}
+
+      - name: Report image digest
+        run: echo "${IMAGE}@${{ steps.image.outputs.digest }}"

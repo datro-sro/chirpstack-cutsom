@@ -626,8 +626,7 @@ impl Data {
     }
 
     async fn set_mac_commands(&mut self) -> Result<()> {
-        let conf = config::get();
-        if conf.network.mac_commands_disabled {
+        if maccommand::clear_if_disabled(&self.device_profile, &mut self.mac_commands) {
             return Ok(());
         }
 
