@@ -2,6 +2,9 @@ name: Build custom ChirpStack image
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - zenner-mac-policy-v4.17.0
 
 permissions:
   contents: read
